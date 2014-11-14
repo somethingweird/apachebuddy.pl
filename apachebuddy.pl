@@ -107,9 +107,17 @@ sub find_included_files {
 			# my @new_includes; 
 
 			# if the line looks like an include, then we want to examine it
-			if ( $_ =~ m/^\s*include/i ) {
+
+			# if ( $_ =~ m/^\s*include/i ) {
+			if ( $_ =~ m/^\s*(include|includeoptional)/i ) {
 				# grab the included file name or file glob
-				$_ =~ s/\s*include\s+(.+)\s*/$1/i;
+
+				# old code from 0.3
+				# $_ =~ s/\s*include\s+(.+)\s*/$1/i;
+
+				# Added feature includeoptional in Apache 2.4.6 for CENTOS 7
+				# TODO: determine what version of apache and apply regex
+				$_ =~ s/\s*(include|includeoptional)\s+(.+)\s*/$2/i;
 
 				# strip out any quoting
 				$_ =~ s/['"]+//g;
@@ -121,7 +129,6 @@ sub find_included_files {
 				}
 
 				# check for file globbing
-
 				if(-d $_ && $_ !~ /\*$/) {
 					print "VERBOSE: Adding glob to ".$_.", is a directory\n" if $main::VERBOSE;
 					$_ .= "/" if($_ !~ /\/$/);
@@ -484,13 +491,20 @@ sub get_apache_model {
 	my ( $process_name ) = @_;
 	my $model = `$process_name -l | egrep "worker.c|prefork.c"`;
 	chomp($model);
-	$model =~ s/\s*(.*)\.c/$1/;
+	$model =~ s/\s*(.*)/$1/;
 
+	# TODO: find apache version then apply this patch.
+	if ($model eq '') {
+		# CENTOS 7.0 with apache 2.4
+		$model = `$process_name -V | egrep "worker|prefork"`;
+		chomp($model);
+		$model =~ s/.+(worker|prefork)/$1/i;
+	}
+	
 	# return the name of the MPM, or 0 if there is no result
 	if ( $model eq '' ) {
 		$model = 0 ;
 	}
-
 	return $model;
 }
 
@@ -966,7 +980,11 @@ else {
 	}
 	else {
 		print "The process running on port $port is not Apache. \n Falling back to process list...\n";
-                $pid = `ps aux | grep -v grep | egrep \'^root\.\*(httpd|apache2)\$\' | awk \'BEGIN {ORS=\"\"} {print \$2}\' `;
+                $pid = `ps aux | grep -v grep | egrep \'^root\.\*(httpd|apache2)(\.\*)\$\' | awk \'BEGIN {ORS=\"\"} {print \$2}\' `;
+		if ($pid eq '') {
+			# CENTOS 7.0 Patch
+                	$pid = `ps aux | grep -v grep | egrep \'^root\.\*(httpd|apache2)\$\' | awk \'BEGIN {ORS=\"\"} {print \$2}\' `;
+		}
                 if ( $pid eq '' ) {
                     print "Could not find Apache process. Exiting...\n";
   		    exit;
@@ -1032,6 +1050,12 @@ else {
 
 	# determine what the max clients setting is 
 	my $maxclients = find_master_value(\@config_array, $model, 'maxclients');
+
+	# Apache 2.4.6 - need to find version and then apply conditional statement
+	if ($maxclients eq 'CONFIG NOT FOUND') {
+		$maxclients = find_master_value(\@config_array, $model, 'maxrequestworkers');
+	};
+
 	$maxclients = 256 if($maxclients eq 'CONFIG NOT FOUND');
 	print "Your max clients setting is ".$maxclients."\n";
 
